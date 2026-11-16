@@ -54,13 +54,12 @@ const SeaCreatures = () => {
   const creaturesRef = useRef<THREE.Group[]>([]);
   
   const materials = useMemo(() => Array.from({ length: 15 }).map(() => 
-    new THREE.MeshPhysicalMaterial({ 
+    new THREE.MeshStandardMaterial({ 
       color: '#010614', 
       transparent: true, 
-      roughness: 0.3,
-      metalness: 0.2,
-      transmission: 0.1,
-      thickness: 0.5
+      opacity: 0.85,
+      roughness: 0.35,
+      metalness: 0.2
     })
   ), []);
 
@@ -401,11 +400,12 @@ export const HyperEnvironment = ({ isFoggy, isNightOverride }: { isFoggy: boolea
           castShadow
           position={[sunX, sunY, 0]}
           intensity={isFoggy ? 0.5 : lightIntensity}
-          shadow-mapSize={[2048, 2048]}
-          shadow-camera-left={-20}
-          shadow-camera-right={20}
-          shadow-camera-top={20}
-          shadow-camera-bottom={-20}
+          shadow-mapSize={[1024, 1024]}
+          shadow-bias={-0.0005}
+          shadow-camera-left={-10}
+          shadow-camera-right={10}
+          shadow-camera-top={10}
+          shadow-camera-bottom={-10}
         />
       )}
 
@@ -413,14 +413,15 @@ export const HyperEnvironment = ({ isFoggy, isNightOverride }: { isFoggy: boolea
       {isNight && (
         <directionalLight
           castShadow
-          position={[-sunX, Math.abs(sunY), 0]} // Moon is opposite to sun, but above horizon
+          position={[-sunX, Math.abs(sunY), 0]}
           intensity={0.4}
           color="#aaccff"
-          shadow-mapSize={[2048, 2048]}
-          shadow-camera-left={-20}
-          shadow-camera-right={20}
-          shadow-camera-top={20}
-          shadow-camera-bottom={-20}
+          shadow-mapSize={[1024, 1024]}
+          shadow-bias={-0.0005}
+          shadow-camera-left={-10}
+          shadow-camera-right={10}
+          shadow-camera-top={10}
+          shadow-camera-bottom={-10}
         />
       )}
 

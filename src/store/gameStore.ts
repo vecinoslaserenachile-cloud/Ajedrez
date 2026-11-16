@@ -1,6 +1,17 @@
 import { create } from 'zustand';
 import { Chess, Square } from 'chess.js';
 
+export type CameraPreset = '3d' | 'top';
+
+export const PIECE_NAMES_ES: Record<string, string> = {
+  k: 'Faro Monumental (Rey)',
+  q: 'Catedral (Reina)',
+  n: 'Moai (Caballo)',
+  b: 'Campanario (Alfil)',
+  r: 'Fuerte (Torre)',
+  p: 'Jarro Pato (Peón)',
+};
+
 interface GameState {
   game: Chess;
   selectedSquare: Square | null;
@@ -11,17 +22,44 @@ interface GameState {
   isInteracting: boolean;
   isAssistedMode: boolean;
   isSoundEnabled: boolean;
+  cameraPreset: CameraPreset;
+  isCameraLocked: boolean;
+  cameraResetTick: number;
   gameTick: number;
   setInteracting: (val: boolean) => void;
   setAssistedMode: (val: boolean) => void;
   setSoundEnabled: (val: boolean) => void;
+  setCameraPreset: (preset: CameraPreset) => void;
+  setCameraLocked: (locked: boolean) => void;
+  triggerCameraReset: () => void;
   setHistoryPiece: (piece: string | null) => void;
   hoverPiece: (square: Square | null) => void;
   clickSquare: (square: Square) => void;
   pointerUpSquare: (square: Square) => void;
+  clearSelection: () => void;
   makeComputerMove: () => void;
   resetGame: () => void;
 }
+
+const computeBestMovesForSquare = (game: Chess, square: Square): string[] => {
+  const moves = game.moves({ square, verbose: true });
+  let bestMoveList: string[] = [];
+  let bestScore = -Infinity;
+
+  moves.forEach((m) => {
+    game.move(m);
+    const score = minimax(game, 2, -Infinity, Infinity, false);
+    game.undo();
+    if (score > bestScore) {
+      bestScore = score;
+      bestMoveList = [m.to];
+    } else if (score === bestScore) {
+      bestMoveList.push(m.to);
+    }
+  });
+
+  return bestMoveList;
+};
 
 export const useGameStore = create<GameState>((set, get) => ({
   game: new Chess(),
@@ -33,16 +71,54 @@ export const useGameStore = create<GameState>((set, get) => ({
   isInteracting: false,
   isAssistedMode: false,
   isSoundEnabled: true,
+  cameraPreset: '3d',
+  isCameraLocked: false,
+  cameraResetTick: 0,
   gameTick: 0,
 
   setInteracting: (val) => set({ isInteracting: val }),
-  setAssistedMode: (val) => set({ isAssistedMode: val }),
+
+  setAssistedMode: (val) => {
+    const { game, selectedSquare } = get();
+    if (val && selectedSquare) {
+      const piece = game.get(selectedSquare);
+      if (piece && piece.color === game.turn() && game.turn() === 'w') {
+        set({
+          isAssistedMode: true,
+          bestMoves: computeBestMovesForSquare(game, selectedSquare),
+        });
+        return;
+      }
+    }
+    set({ isAssistedMode: val, bestMoves: val ? get().bestMoves : [] });
+  },
+
   setSoundEnabled: (val) => set({ isSoundEnabled: val }),
+
+  setCameraPreset: (preset) =>
+    set((state) => ({
+      cameraPreset: preset,
+      cameraResetTick: state.cameraResetTick + 1,
+    })),
+
+  setCameraLocked: (locked) => set({ isCameraLocked: locked }),
+
+  triggerCameraReset: () =>
+    set((state) => ({ cameraResetTick: state.cameraResetTick + 1 })),
+
   setHistoryPiece: (piece) => set({ historyPiece: piece }),
+
+  clearSelection: () =>
+    set({
+      selectedSquare: null,
+      hoveredSquare: null,
+      possibleMoves: [],
+      bestMoves: [],
+    }),
 
   hoverPiece: (square) => {
     const { game, selectedSquare, isAssistedMode } = get();
-    
+
     if (selectedSquare) return;
 
     if (!square) {
@@ -53,29 +129,15 @@ export const useGameStore = create<GameState>((set, get) => ({
     const piece = game.get(square);
     if (piece && piece.color === game.turn() && game.turn() === 'w') {
       const moves = game.moves({ square, verbose: true });
-      
-      let bestMoveList: string[] = [];
-      if (isAssistedMode) {
-        // Calculate best moves for this piece
-        let bestScore = -Infinity;
-        moves.forEach(m => {
-          game.move(m);
-          const score = minimax(game, 2, -Infinity, Infinity, false);
-          game.undo();
-          if (score > bestScore) {
-            bestScore = score;
-            bestMoveList = [m.to];
-          } else if (score === bestScore) {
-            bestMoveList.push(m.to);
-          }
-        });
-      }
+      const bestMoveList = isAssistedMode
+        ? computeBestMovesForSquare(game, square)
+        : [];
 
-      set({ 
-        hoveredSquare: square, 
-        possibleMoves: moves.map(m => m.to),
+      set({
+        hoveredSquare: square,
+        possibleMoves: moves.map((m) => m.to),
         bestMoves: bestMoveList,
-        historyPiece: piece.type
+        historyPiece: piece.type,
       });
     } else {
       set({ hoveredSquare: null, possibleMoves: [], bestMoves: [] });
@@ -83,58 +145,82 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   clickSquare: (square) => {
-    const { game, selectedSquare, hoveredSquare, possibleMoves, isAssistedMode, isSoundEnabled } = get();
-    
+    const {
+      game,
+      selectedSquare,
+      hoveredSquare,
+      possibleMoves,
+      isAssistedMode,
+      isSoundEnabled,
+    } = get();
+
+    if (game.isGameOver()) return;
+
     const activeSquare = selectedSquare || hoveredSquare;
-    
+
+    // If tapping a valid destination square for the currently active piece, execute move
     if (activeSquare && possibleMoves.includes(square)) {
       try {
         const move = game.move({ from: activeSquare, to: square, promotion: 'q' });
         if (move) {
           if (isSoundEnabled) playMoveSound(move);
-          set({ 
+          set({
             gameTick: get().gameTick + 1,
-            selectedSquare: null, 
+            selectedSquare: null,
             hoveredSquare: null,
             possibleMoves: [],
-            bestMoves: []
+            bestMoves: [],
           });
           return;
         }
       } catch (e) {
-        console.error("Invalid move", e);
+        console.error('Invalid move', e);
       }
+    }
+
+    // Re-tapping the already selected piece deselects it cleanly
+    if (selectedSquare === square) {
+      set({
+        selectedSquare: null,
+        hoveredSquare: null,
+        possibleMoves: [],
+        bestMoves: [],
+      });
+      return;
     }
 
     const piece = game.get(square);
     if (piece && piece.color === game.turn() && game.turn() === 'w') {
       const moves = game.moves({ square, verbose: true });
-      
-      let bestMoveList: string[] = [];
-      if (isAssistedMode) {
-        let bestScore = -Infinity;
-        moves.forEach(m => {
-          game.move(m);
-          const score = minimax(game, 2, -Infinity, Infinity, false);
-          game.undo();
-          if (score > bestScore) {
-            bestScore = score;
-            bestMoveList = [m.to];
-          } else if (score === bestScore) {
-            bestMoveList.push(m.to);
-          }
-        });
-      }
+      const bestMoveList = isAssistedMode
+        ? computeBestMovesForSquare(game, square)
+        : [];
 
-      set({ 
-        selectedSquare: square, 
+      set({
+        selectedSquare: square,
         hoveredSquare: null,
-        possibleMoves: moves.map(m => m.to),
+        possibleMoves: moves.map((m) => m.to),
         bestMoves: bestMoveList,
-        historyPiece: piece.type
+        historyPiece: piece.type,
       });
     } else {
-      set({ selectedSquare: null, hoveredSquare: null, possibleMoves: [], bestMoves: [] });
+      // Allow inspecting any piece's heritage info even if it's black's piece
+      if (piece) {
+        set({
+          selectedSquare: null,
+          hoveredSquare: null,
+          possibleMoves: [],
+          bestMoves: [],
+          historyPiece: piece.type,
+        });
+      } else {
+        set({
+          selectedSquare: null,
+          hoveredSquare: null,
+          possibleMoves: [],
+          bestMoves: [],
+        });
+      }
     }
   },
 
@@ -145,16 +231,16 @@ export const useGameStore = create<GameState>((set, get) => ({
         const move = game.move({ from: selectedSquare, to: square, promotion: 'q' });
         if (move) {
           if (isSoundEnabled) playMoveSound(move);
-          set({ 
+          set({
             gameTick: get().gameTick + 1,
-            selectedSquare: null, 
+            selectedSquare: null,
             hoveredSquare: null,
             possibleMoves: [],
-            bestMoves: []
+            bestMoves: [],
           });
         }
       } catch (e) {
-        console.error("Invalid move", e);
+        console.error('Invalid move', e);
       }
     }
   },
@@ -169,29 +255,31 @@ export const useGameStore = create<GameState>((set, get) => ({
       try {
         const move = game.move(bestMove);
         if (isSoundEnabled) playMoveSound(move);
-        set({ 
+        set({
           gameTick: get().gameTick + 1,
-          selectedSquare: null, 
+          selectedSquare: null,
+          hoveredSquare: null,
           possibleMoves: [],
           bestMoves: [],
-          historyPiece: bestMove.piece
+          historyPiece: bestMove.piece,
         });
       } catch (e) {
-        console.error("Computer move failed", e);
+        console.error('Computer move failed', e);
       }
     }
   },
 
   resetGame: () => {
-    set({
+    set((state) => ({
       game: new Chess(),
       selectedSquare: null,
+      hoveredSquare: null,
       possibleMoves: [],
       bestMoves: [],
       historyPiece: null,
-      gameTick: 0
-    });
-  }
+      gameTick: state.gameTick + 1,
+    }));
+  },
 }));
 
 // Sound helpers
@@ -240,7 +328,6 @@ const evaluateBoard = (game: Chess) => {
       const piece = board[i][j];
       if (piece) {
         const val = getPieceValue(piece.type);
-        // Center control bonus
         const centerBonus = (3.5 - Math.abs(3.5 - i)) * (3.5 - Math.abs(3.5 - j)) * 0.5;
         const pieceScore = val + centerBonus;
         score += piece.color === 'w' ? pieceScore : -pieceScore;
@@ -256,7 +343,6 @@ const minimax = (game: Chess, depth: number, alpha: number, beta: number, isMaxi
   }
 
   const moves = game.moves({ verbose: true });
-  // Sort moves to improve alpha-beta pruning (captures first)
   moves.sort((a, b) => (b.captured ? 1 : 0) - (a.captured ? 1 : 0));
 
   if (isMaximizingPlayer) {
